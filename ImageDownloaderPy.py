@@ -1,10 +1,11 @@
-import Image
+from PIL import Image
 import base64
 import requests
 import appex
 import photos
 import os
 import shutil
+import re
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from urllib import request
@@ -29,13 +30,13 @@ class TweetImageDownloadIOS:
 			return
 			
 		#print(tweetStatus)
-		imgURL = self.getMeddiaURL(tweetStatus)
-		if imgURL is None:
+		mediaURLs = self.getMeddiaURL(tweetStatus)
+		if mediaURLs is None:
 			print('there is no images.')
 			return
 			
 		#print(imgURL)
-		self.downLoadImages(imgURL)
+		self.downLoadMedia(mediaURLs)
 
 	def bearer(self, key, secret):
 		credential = base64.b64encode(bytes(f'{key}:{secret}', 'utf-8')).decode()
@@ -59,7 +60,7 @@ class TweetImageDownloadIOS:
 			raise None
 
 	def getTweet(self, bearerToken, id):
-		url = f'https://api.twitter.com/2/tweets?ids={id}&tweet.fields=created_at&expansions=attachments.media_keys&media.fields=preview_image_url,url'
+		url = f'https://api.twitter.com/2/tweets?ids={id}&tweet.fields=created_at&expansions=attachments.media_keys&media.fields=preview_image_url,url,variants'
 		headers = {'Authorization': f'Bearer {bearerToken}'}
 		payload = {'tweet_mode': 'extended'}
 
@@ -81,7 +82,26 @@ class TweetImageDownloadIOS:
 
 	def getMeddiaURL(self, tweet):
 		if 'media' in tweet['includes']:
-			urls = [x['url'] for x in tweet['includes']['media']]
+			urls = []
+			media = tweet['includes']['media']
+			for m in media:
+				mediaType = m['type']
+				if mediaType == 'video':
+					variants = m['variants']
+					bestBitRate = 0
+					bestBitRateURL = ''
+					for v in variants:
+						if 'bit_rate' not in v:
+						   continue
+						if bestBitRate < v['bit_rate']:
+							bestBitRate = v['bit_rate']
+							bestBitRateURL = v['url']
+					if len(bestBitRateURL) > 0:
+						urls.append(bestBitRateURL)
+				elif mediaType == 'photo':
+					urls.append(m['url'])
+				else:
+					return None
 			return urls
 		else:
 			return None
@@ -95,21 +115,34 @@ class TweetImageDownloadIOS:
 			origLink = link[0:link.find('.jpg')] + ext
 		return origLink
 
-	def downLoadImages(self, imgUrls):
+	def downLoadMedia(self, imgUrls):
 		for url in imgUrls:
-			regex = re.compile('media\/([a-zA-Z0-9_-]+\.\w+)')
+			regex = re.compile('\/([a-zA-Z0-9_-]+\.(?:mp4|jpg|png))')
 			match = regex.search(url)
 			filename = match.group(1)
-			#print(filename)
 			filename = f'temp/{filename}'
-			origUrl = self.changeToOrig(url)
-			with request.urlopen(origUrl) as res:
-				imgData = res.read()
-				with Image.open(BytesIO(imgData)) as img:
-					img.save(filename)
+			#print(filename)
+			
+			isVideo = False
+			if (url.find('.mp4') > -1):
+				isVideo = True
+​
+			if isVideo is True:
+				dlURL = url
+			else:
+				dlURL = self.changeToOrig(url)
+				
+			with request.urlopen(dlURL) as res:
+				with open(filename, "wb") as f:
+					f.write(res.read())
 					print('saving...', url)
-					self.addToAlbum(filename, 'Pythonista')
 					
+					if isVideo is True:
+						fileUri = Path(filename).resolve().as_uri()
+						dialogs.share_url(fileUri)
+					else:
+						self.addToAlbum(filename, 'Pythonista')
+​
 	def addToAlbum(self, image_path, album_name):
 		try:
 			album = [a for a in photos.get_albums() if a.title == album_name][0]
