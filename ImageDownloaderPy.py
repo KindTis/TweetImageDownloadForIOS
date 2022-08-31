@@ -169,4 +169,6 @@ if __name__ == '__main__':
 	dl = TweetImageDownloadIOS(tweetId)
 	shutil.rmtree('temp')
 	print('done.')
-	
+
+	if appex.is_running_extension():
+		appex.finish()
