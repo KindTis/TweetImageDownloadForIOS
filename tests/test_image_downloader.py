@@ -32,16 +32,47 @@ class ShareExtensionTests(unittest.TestCase):
         self.saved = []
         self.shared = []
         self.finished = []
+        self.allow_video_save = True
 
     def run_share(self, shared_url, responses):
         album = SimpleNamespace(
             title='Pythonista',
+            local_id='pythonista-album',
             add_assets=lambda assets: self.saved.extend(assets),
         )
 
         def create_asset(path):
-            photo = Path(path)
-            return photo.name, photo.read_bytes()
+            media = Path(path)
+            return media.name, media.read_bytes()
+
+        def fetch_collections(identifiers, options):
+            collection = album if identifiers == [album.local_id] else None
+            return SimpleNamespace(firstObject=lambda: collection)
+
+        def create_video_request(path):
+            return SimpleNamespace(placeholderForCreatedAsset=lambda: create_asset(path))
+
+        def perform_changes(block, error):
+            if not self.allow_video_save:
+                return False
+            block(None)
+            return True
+
+        photokit = {
+            'NSURL': SimpleNamespace(fileURLWithPath_=str),
+            'PHAssetCollection': SimpleNamespace(
+                fetchAssetCollectionsWithLocalIdentifiers_options_=fetch_collections,
+            ),
+            'PHAssetCollectionChangeRequest': SimpleNamespace(
+                changeRequestForAssetCollection_=lambda collection: SimpleNamespace(addAssets_=collection.add_assets),
+            ),
+            'PHAssetChangeRequest': SimpleNamespace(
+                creationRequestForAssetFromVideoAtFileURL_=create_video_request,
+            ),
+            'PHPhotoLibrary': SimpleNamespace(
+                sharedPhotoLibrary=lambda: SimpleNamespace(performChangesAndWait_error_=perform_changes),
+            ),
+        }
 
         modules = {
             'appex': SimpleNamespace(
@@ -54,6 +85,11 @@ class ShareExtensionTests(unittest.TestCase):
                 create_image_asset=create_asset,
             ),
             'dialogs': SimpleNamespace(share_url=self.shared.append),
+            'objc_util': SimpleNamespace(
+                load_framework=lambda name: None,
+                ObjCClass=photokit.__getitem__,
+                ObjCBlock=lambda function, **kwargs: function,
+            ),
         }
 
         def open_url(request, **kwargs):
@@ -82,17 +118,28 @@ class ShareExtensionTests(unittest.TestCase):
         self.assertEqual(self.saved, [('first.jpg', b'first'), ('second.png', b'second')])
         self.assertEqual(self.finished, [True])
 
-    def test_shares_highest_bitrate_mp4(self):
+    def test_saves_highest_bitrate_mp4_to_album(self):
         url = 'https://video.twimg.com/video/best.mp4?tag=1'
         video = {'type': 'video', 'video_info': {'variants': [
-            {'content_type': 'application/x-mpegURL', 'url': 'https://video.twimg.com/stream.m3u8'},
-            {'content_type': 'video/mp4', 'bitrate': 200, 'url': url},
+            {'content_type': 'application/x-mpegURL', 'bitrate': 300, 'url': 'https://video.twimg.com/stream.m3u8'},
             {'content_type': 'video/mp4', 'bitrate': 100, 'url': 'https://video.twimg.com/video/low.mp4'},
+            {'content_type': 'video/mp4', 'bitrate': 200, 'url': url},
         ]}}
         self.run_share(POST_URL, {POST_URL: post_html('123', [video]).encode(), url: b'video'})
-        self.assertEqual(len(self.shared), 1)
-        self.assertTrue(self.shared[0].endswith('/best.mp4'))
+        self.assertEqual(self.saved, [('best.mp4', b'video')])
+        self.assertEqual(self.shared, [])
+        self.assertEqual(self.finished, [True])
+
+    def test_reports_video_album_save_failure(self):
+        self.allow_video_save = False
+        url = 'https://video.twimg.com/video/best.mp4'
+        video = {'type': 'video', 'video_info': {'variants': [
+            {'content_type': 'video/mp4', 'bitrate': 200, 'url': url},
+        ]}}
+        output = self.run_share(POST_URL, {POST_URL: post_html('123', [video]).encode(), url: b'video'})
+        self.assertIn('Could not save the video', output)
         self.assertEqual(self.saved, [])
+        self.assertEqual(self.finished, [])
 
     def test_reports_unavailable_post_data_without_saving(self):
         output = self.run_share(POST_URL, {POST_URL: post_html('456', []).encode()})

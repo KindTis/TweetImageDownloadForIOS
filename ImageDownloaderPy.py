@@ -4,11 +4,9 @@ import shutil
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib import request
-from urllib.error import URLError
 from urllib.parse import urlsplit
 
 import appex
-import dialogs
 import photos
 
 
@@ -95,18 +93,52 @@ class TweetImageDownloadIOS:
                     shutil.copyfileobj(response, file)
 
                 print('saving...', url)
-                if isVideo:
-                    dialogs.share_url(filename.resolve().as_uri())
-                else:
-                    self.addToAlbum(str(filename), 'Pythonista')
+                self.addToAlbum(filename, 'Pythonista')
 
-    def addToAlbum(self, image_path, album_name):
+    def addToAlbum(self, file_path, album_name):
         try:
             album = [a for a in photos.get_albums() if a.title == album_name][0]
         except IndexError:
             album = photos.create_album(album_name)
-        asset = photos.create_image_asset(image_path)
-        album.add_assets([asset])
+        if file_path.suffix == '.mp4':
+            self.addVideoToAlbum(file_path, album)
+        else:
+            asset = photos.create_image_asset(str(file_path))
+            album.add_assets([asset])
+
+    def addVideoToAlbum(self, file_path, album):
+        from ctypes import c_void_p
+        from objc_util import ObjCBlock, ObjCClass, load_framework
+
+        load_framework('Photos')
+        collections = ObjCClass('PHAssetCollection').fetchAssetCollectionsWithLocalIdentifiers_options_(
+            [album.local_id], None,
+        )
+        collection = collections.firstObject()
+        if collection is None:
+            raise OSError('Could not save the video: the album is unavailable.')
+
+        video_url = ObjCClass('NSURL').fileURLWithPath_(str(file_path))
+        asset_requests = ObjCClass('PHAssetChangeRequest')
+        album_requests = ObjCClass('PHAssetCollectionChangeRequest')
+        added = False
+
+        def add_video(_block):
+            nonlocal added
+            album_change = album_requests.changeRequestForAssetCollection_(collection)
+            if album_change is None:
+                return
+            video_change = asset_requests.creationRequestForAssetFromVideoAtFileURL_(video_url)
+            placeholder = video_change.placeholderForCreatedAsset() if video_change is not None else None
+            if placeholder is not None:
+                album_change.addAssets_([placeholder])
+                added = True
+
+        # Wait for Photos to import the file before the temporary directory is removed.
+        changes = ObjCBlock(add_video, restype=None, argtypes=[c_void_p])
+        library = ObjCClass('PHPhotoLibrary').sharedPhotoLibrary()
+        if not library.performChangesAndWait_error_(changes, None) or not added:
+            raise OSError('Could not save the video to the Photos album.')
 
 
 if __name__ == '__main__':
@@ -116,7 +148,7 @@ if __name__ == '__main__':
 
     try:
         TweetImageDownloadIOS(tweetUrl)
-    except (URLError, TimeoutError, ValueError) as error:
+    except (OSError, ValueError) as error:
         print(f'Download failed: {error}')
     else:
         print('done.')
