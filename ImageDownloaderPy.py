@@ -65,7 +65,7 @@ class TweetImageDownloadIOS:
                     r'/media/[A-Za-z0-9_-]+\.(?:jpg|png)', photo.path,
                 ):
                     urls.append(url)
-            elif item.get('type') == 'video':
+            elif item.get('type') in ('video', 'animated_gif'):
                 variants = (item.get('video_info') or {}).get('variants', [])
                 mp4s = [
                     variant for variant in variants

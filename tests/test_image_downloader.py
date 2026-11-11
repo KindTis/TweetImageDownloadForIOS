@@ -141,6 +141,28 @@ class ShareExtensionTests(unittest.TestCase):
         self.assertEqual(self.saved, [])
         self.assertEqual(self.finished, [])
 
+    def test_saves_zero_bitrate_animations_to_album(self):
+        first_url = 'https://video.twimg.com/tweet_video/first.mp4'
+        second_url = 'https://video.twimg.com/tweet_video/second.mp4'
+        animations = [
+            {'type': 'animated_gif', 'video_info': {'variants': [
+                {'content_type': 'video/mp4', 'bitrate': 0, 'url': first_url},
+            ]}},
+            {'type': 'animated_gif', 'video_info': {'variants': [
+                {'content_type': 'video/mp4', 'bitrate': 0, 'url': second_url},
+            ]}},
+        ]
+        self.run_share(POST_URL, {
+            POST_URL: post_html('123', animations).encode(),
+            first_url: b'first animation',
+            second_url: b'second animation',
+        })
+        self.assertEqual(self.saved, [
+            ('first.mp4', b'first animation'),
+            ('second.mp4', b'second animation'),
+        ])
+        self.assertEqual(self.finished, [True])
+
     def test_reports_unavailable_post_data_without_saving(self):
         output = self.run_share(POST_URL, {POST_URL: post_html('456', []).encode()})
         self.assertIn('Could not find the requested post', output)
